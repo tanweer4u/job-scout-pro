@@ -30,12 +30,23 @@ exports.handler = async function(event) {
   // ── Action: parse resume with Claude ──────────────────
   if(action === 'parse_resume') {
     const { fileData, fileMediaType, prompt, system } = body;
-    const content = fileMediaType === 'application/pdf'
-      ? [
-          { type:'document', source:{ type:'base64', media_type:'application/pdf', data:fileData }},
-          { type:'text', text:prompt }
-        ]
-      : prompt + '\n\nResume:\n' + atob(fileData);
+
+    let content;
+    if(fileMediaType === 'application/pdf') {
+      content = [
+        { type:'document', source:{ type:'base64', media_type:'application/pdf', data:fileData }},
+        { type:'text', text:prompt }
+      ];
+    } else {
+      // DOCX or TXT: fileData is base64-encoded plain text
+      let resumeText = '';
+      try {
+        resumeText = decodeURIComponent(escape(Buffer.from(fileData, 'base64').toString('binary')));
+      } catch(e) {
+        resumeText = Buffer.from(fileData, 'base64').toString('utf8');
+      }
+      content = `${prompt}\n\nResume text:\n${resumeText.slice(0, 8000)}`;
+    }
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
