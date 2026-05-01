@@ -234,6 +234,7 @@ footer a:hover { color: var(--accent); }
   .resume-strip { flex-direction: column; gap: 12px; }
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -365,6 +366,7 @@ footer a:hover { color: var(--accent); }
 let fileData = null;
 let fileName = '';
 let fileMediaType = 'application/pdf';
+let extractedText = null; // for DOCX/TXT files
 let activeSources = new Set(['google','linkedin','naukri','indeed']);
 
 // ── File handling ──────────────────────────────────────
@@ -389,21 +391,49 @@ function handleFile(file) {
 
   hideErr();
   fileName = file.name;
-  fileMediaType = file.type === 'application/pdf' ? 'application/pdf' : 'text/plain';
+  const isDocx = /\.(docx|doc)$/i.test(file.name) || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.type === 'application/msword';
+  const isTxt  = file.type === 'text/plain' || /\.txt$/i.test(file.name);
+  fileMediaType = file.type === 'application/pdf' ? 'application/pdf' : isDocx ? 'docx' : 'text/plain';
 
   document.getElementById('fileName').textContent = file.name;
   document.getElementById('fileSize').textContent = fmtSize(file.size);
   document.getElementById('filePill').classList.add('show');
   uploadArea.style.display = 'none';
-
-  const reader = new FileReader();
-  reader.onload = ev => { fileData = ev.target.result.split(',')[1]; checkReady(); };
-  reader.readAsDataURL(file);
   setStep(2);
+
+  if(isDocx) {
+    // Extract plain text from DOCX using mammoth
+    const arrayReader = new FileReader();
+    arrayReader.onload = async ev => {
+      try {
+        const result = await mammoth.extractRawText({ arrayBuffer: ev.target.result });
+        extractedText = result.value;
+        fileData = btoa(unescape(encodeURIComponent(extractedText))); // base64 encode the text
+        checkReady();
+      } catch(e) {
+        showErr('Could not read DOCX file. Please try saving as PDF and uploading again.');
+      }
+    };
+    arrayReader.readAsArrayBuffer(file);
+  } else if(isTxt) {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      extractedText = ev.target.result;
+      fileData = btoa(unescape(encodeURIComponent(extractedText)));
+      checkReady();
+    };
+    reader.readAsText(file);
+  } else {
+    // PDF — send as base64 binary
+    extractedText = null;
+    const reader = new FileReader();
+    reader.onload = ev => { fileData = ev.target.result.split(',')[1]; checkReady(); };
+    reader.readAsDataURL(file);
+  }
 }
 
 function changeFile() {
-  fileData = null; fileName = '';
+  fileData = null; fileName = ''; extractedText = null;
   document.getElementById('filePill').classList.remove('show');
   uploadArea.style.display = 'block';
   fileInput.value = '';
@@ -765,8 +795,15 @@ Return array sorted by matchScore descending:
     try {
       scores = JSON.parse(rankResult.replace(/```json|```/g,'').trim());
     } catch(e) {
-      scores = allJobs.slice(0,10).map((j,i)=>({ id:i, matchScore:70-i*3, skillsScore:72-i*3, experienceScore:68-i*3, whyMatch:'Good alignment with your background.', topMatchSkills:(resume.topSkills||[]).slice(0,3) }));
+      scores = allJobs.slice(0,10).map((j,i)=>({ id:i, matchScore:70-i*3, skillsScore:72-i*3, experienceScore:68-i*3, locationEligible:true, whyMatch:'Good alignment with your background.', topMatchSkills:(resume.topSkills||[]).slice(0,3) }));
     }
+
+    const rankedJobs = scores
+      .map(s => ({ ...allJobs[s.id], ...s }))
+      .filter(j => j.title && j.matchScore >= 45 && j.locationEligible !== false)
+      .sort((a,b) => b.matchScore - a.matchScore)
+      .slice(0, 12)
+      .map((j,i) => ({ ...j, rank: i+1 }));
 
     const filteredOut = scores.length - rankedJobs.length;
     doneLog(rankLog, `${rankedJobs.length} strong matches found${filteredOut > 0 ? ` · ${filteredOut} filtered out (low match or location ineligible)` : ''}`);
@@ -778,13 +815,6 @@ Return array sorted by matchScore descending:
       document.getElementById('searchBtn').disabled = false;
       return;
     }
-
-    const rankedJobs = scores
-      .map(s => ({ ...allJobs[s.id], ...s }))
-      .filter(j => j.title && j.matchScore >= 45 && j.locationEligible !== false)
-      .sort((a,b) => b.matchScore - a.matchScore)
-      .slice(0, 12)
-      .map((j,i) => ({ ...j, rank: i+1 }));
 
     document.getElementById('spinIcon').style.display = 'none';
     document.getElementById('progressTitle').textContent = `Done. ${rankedJobs.length} jobs ranked.`;
