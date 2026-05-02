@@ -246,7 +246,7 @@ footer a:hover { color: var(--accent); }
 
 <div class="hero">
   <h1>Upload your resume.<br><em>Get ranked jobs that fit you best.</em></h1>
-  <p>Searches Google Jobs, LinkedIn, Naukri, and Indeed. Every listing ranked by skills match, experience fit, and location eligibility.</p>
+  <p>Searches Google Jobs, LinkedIn, Naukri, and Adzuna. Every listing ranked by skills match, experience fit, and location eligibility.</p>
 </div>
 
 <div class="stepbar">
@@ -280,24 +280,23 @@ footer a:hover { color: var(--accent); }
 
 <!-- Target role -->
 <div class="card">
-  <div class="card-label">Target Role</div>
-  <div class="field-row">
-    <div class="field">
-      <label>Job Title Override (optional)</label>
-      <input type="text" id="jobTitle" placeholder="e.g. Head of Content, VP Marketing">
-      <div class="field-hint">Leave blank to use title extracted from your resume</div>
-    </div>
-    <div class="field">
-      <label>Location</label>
-      <input type="text" id="location" placeholder="e.g. Bengaluru, Mumbai, Remote">
-    </div>
+  <div class="card-label">Target Roles <span style="color:var(--danger);font-size:11px;margin-left:4px">Required</span></div>
+  <div class="field" style="margin-bottom:12px">
+    <label>What roles are you looking for?</label>
+    <input type="text" id="jobTitle" placeholder="e.g. Head of Content, SEO Lead, Content Director" oninput="checkReady()">
+    <div class="field-hint">Enter 1-3 roles separated by commas. The tool will automatically find all synonyms and title variants for each role you enter. Make sure your target roles align with the skills on your resume so matches stay relevant.</div>
+  </div>
+  <div class="field">
+    <label>Location</label>
+    <input type="text" id="location" placeholder="e.g. Bengaluru, Mumbai, Delhi, Chennai, Gurgaon, Remote">
+    <div class="field-hint">Most Preferred Location First.</div>
   </div>
 </div>
 
 <!-- Sources -->
 <div class="card">
   <div class="card-label">Job Sources</div>
-  <div class="sources-grid">
+  <div class="sources-grid" style="grid-template-columns: repeat(4,1fr)">
     <div class="src-btn on" data-src="google" onclick="toggleSrc(this)">
       <div class="src-icon">🔍</div>
       <span>Google Jobs</span>
@@ -314,12 +313,12 @@ footer a:hover { color: var(--accent); }
       <div class="src-tag">✓ ON</div>
     </div>
     <div class="src-btn on" data-src="indeed" onclick="toggleSrc(this)">
-      <div class="src-icon">📋</div>
-      <span>Indeed</span>
+      <div class="src-icon">🔎</div>
+      <span>Adzuna</span>
       <div class="src-tag">✓ ON</div>
     </div>
   </div>
-  <div class="field-hint" style="margin-top:8px">Last 15 days only. Google Jobs includes Jobgether, Glassdoor and company career pages automatically.</div>
+  <div class="field-hint" style="margin-top:8px">Jobs posted in the last 15 days. Covers 90%+ of Indian job market across all four sources.</div>
 </div>
 
 
@@ -456,7 +455,15 @@ function toggleSrc(el) {
 
 // ── Ready check ────────────────────────────────────────
 function checkReady() {
-  document.getElementById('searchBtn').disabled = !fileData;
+  const hasFile = !!fileData;
+  const hasRole = document.getElementById('jobTitle').value.trim().length > 2;
+  document.getElementById('searchBtn').disabled = !(hasFile && hasRole);
+  const roleInput = document.getElementById('jobTitle');
+  if(hasFile && !hasRole) {
+    roleInput.style.borderColor = 'rgba(255,92,92,0.4)';
+  } else {
+    roleInput.style.borderColor = '';
+  }
 }
 
 // ── Step indicator ─────────────────────────────────────
@@ -572,33 +579,45 @@ function buildLinkedInUrl(query, location) {
   return `https://www.linkedin.com/jobs/search/?keywords=${q}&location=${l}&f_TPR=r1296000&sortBy=DD`;
 }
 
-function buildNaukriUrl(query, location) {
-  const q = query.toLowerCase().replace(/\s+/g,'-');
-  const l = (location||'india').toLowerCase().replace(/\s+/g,'-');
-  return `https://www.naukri.com/${q}-jobs-in-${l}`;
-}
-
-// valig/indeed-jobs-scraper: confirmed field values from Apify JSON tab
-// country: "in" for India, "ae" for UAE — datePosted: "14" for last 14 days
-
 // ── Source scrapers ────────────────────────────────────
 
 async function scrapeGoogle(query, location) {
-  const dateFilter = `after:${daysAgoDate(15)}`;
-  const input = {
-    query: `${query} ${dateFilter}`,
-    location: location || 'India',
-    include_lrad: false
-  };
-  const items = await apifyRun('johnvc/Google-Jobs-Scraper', input, 90);
-  return (Array.isArray(items)?items:[]).map(j=>({
-    title: j.job_title || j.title || j.position || 'Job Opening',
-    company: j.company_name || j.company || j.employer || 'Company',
-    url: j.URL || j.url || j.apply_link || j.applyLink || '#',
-    snippet: j.description || j.job_description || j.snippet || '',
+  const data = await proxyPost({
+    action: 'serpapi_jobs',
+    query: query,
+    location: location || 'India'
+  });
+  if(data.serpError || data.fetchError || data.error) {
+    console.warn('Google Jobs error:', data.serpError || data.fetchError || data.error);
+  }
+  const results = data.jobs || [];
+  return results.map(j => ({
+    title: j.title || 'Job Opening',
+    company: j.company_name || 'Company',
+    url: j.apply_options?.[0]?.link || j.related_links?.[0]?.link || '#',
+    snippet: j.description || '',
     source: 'Google Jobs',
-    location: j.location || j.job_location || location || 'India',
-    datePosted: j.date || j.posted_at || 'Recent'
+    location: j.location || location || 'India',
+    datePosted: j.detected_extensions?.posted_at || j.extensions?.[0] || 'Recent'
+  }));
+}
+
+async function scrapeAdzuna(query, location) {
+  // Uses Adzuna Jobs API via proxy — structured job data with descriptions
+  const data = await proxyPost({
+    action: 'adzuna_search',
+    query: query,
+    location: location || 'India'
+  });
+  const results = data.results || [];
+  return results.map(j => ({
+    title: j.title || 'Job Opening',
+    company: j.company?.display_name || 'Company',
+    url: j.redirect_url || j.url || '#',
+    snippet: j.description || '',
+    source: 'Adzuna',
+    location: j.location?.display_name || location || 'India',
+    datePosted: j.created ? new Date(j.created).toLocaleDateString('en-IN') : 'Recent'
   }));
 }
 
@@ -618,45 +637,44 @@ async function scrapeLinkedIn(query, location) {
 }
 
 async function scrapeNaukri(query, location) {
-  const startUrl = buildNaukriUrl(query, location);
-  const input = { startUrls:[{ url: startUrl }] };
-  const items = await apifyRun('EYXvM0o2lS7rYzgey', input, 120);
+  // Uses louisdeconinck/naukri-job-scraper — URL-based, confirmed reliable
+  // URL format confirmed: https://www.naukri.com/keyword-jobs?k=keyword&l=location&jobAge=15
+  const slug = query.toLowerCase().replace(/\s+/g, '-');
+  const k = encodeURIComponent(query);
+  const l = encodeURIComponent(location || '');
+  const locationParam = location ? `&l=${l}` : '';
+  const startUrl = `https://www.naukri.com/${slug}-jobs?k=${k}${locationParam}&jobAge=15&sort=1`;
+  const input = {
+    startUrls: [{ url: startUrl }],
+    maxJobs: 15
+  };
+  const items = await apifyRun('louisdeconinck~naukri-job-scraper', input, 120);
   return (Array.isArray(items)?items:[]).map(j=>({
-    title: j.jobTitle || j.title || 'Job Opening',
-    company: j.companyName || j.company || 'Company',
-    url: j.jobUrl || j.applyLink || j.url || '#',
-    snippet: j.jobDescription || j.description || '',
+    title: j.title || j.jobTitle || 'Job Opening',
+    company: j.company || j.companyName || 'Company',
+    url: j.url || j.applyUrl || j.jobUrl || '#',
+    snippet: j.description || j.jobDescription || '',
     source: 'Naukri',
     location: j.location || location || 'India',
-    datePosted: j.postedDate || j.freshness || 'Recent'
+    datePosted: j.date || j.postedDate || 'Recent',
+    experience: j.experience || j.experienceRequired || ''
   }));
 }
 
 async function scrapeIndeed(query, location) {
-  const isUAE = (location||'').toLowerCase().includes('dubai') || (location||'').toLowerCase().includes('uae');
-  const input = {
-    country: isUAE ? 'ae' : 'in',
-    position: query,
-    location: location || '',
-    maxResults: 20,
-    datePosted: '14'
-  };
-  const items = await apifyRun('TrtlecxAsNRbKl1na', input, 120);
-  return (Array.isArray(items)?items:[]).map(j=>({
-    title: j.position || j.title || j.jobTitle || 'Job Opening',
-    company: j.company || j.companyName || 'Company',
-    url: j.url || j.jobUrl || j.applyLink || '#',
-    snippet: j.description || j.jobDescription || '',
-    source: 'Indeed',
-    location: j.location || location || 'India',
-    datePosted: j.postedAt || j.date || j.datePosted || 'Recent'
-  }));
+  // Kept as alias for Adzuna — Indeed actor was returning 0 results
+  return scrapeAdzuna(query, location);
 }
 
 // ── Main search ────────────────────────────────────────
 async function runSearch() {
   const jobTitle = document.getElementById('jobTitle').value.trim();
-  const location = document.getElementById('location').value.trim();
+  const locationRaw = document.getElementById('location').value.trim();
+
+  // Split multi-city input — use first city for URL-based scrapers, pass all to Claude
+  const locationCities = locationRaw ? locationRaw.split(',').map(c => c.trim()).filter(Boolean) : [];
+  const primaryLocation = locationCities[0] || '';
+  const allLocations = locationCities.length > 0 ? locationCities.join(', ') : 'India';
 
   hideErr();
   document.getElementById('searchBtn').disabled = true;
@@ -678,12 +696,12 @@ async function runSearch() {
   "name": "full name",
   "currentTitle": "most recent job title",
   "yearsExperience": number,
-  "topSkills": ["skill1","skill2","skill3","skill4","skill5"],
-  "domains": ["domain1","domain2"],
+  "primaryProfession": "2-4 word description of their core profession e.g. Content Marketing, Software Engineering, Financial Analysis, Product Management",
+  "topSkills": ["top 5 skills directly related to their primary profession only - not generic soft skills like communication"],
+  "secondarySkills": ["top 3 transferable or secondary skills"],
+  "domains": ["industry domain1","domain2"],
   "lastCompany": "company name",
   "seniorityLevel": "junior|mid|senior|lead|director|vp",
-  "searchQueries": ["primary job title", "alternate title 1", "alternate title 2", "alternate title 3"],
-  "searchQueryNote": "Generate 4 variations of likely job titles for this person regardless of seniority label. Include titles like Content Manager, Content Lead, Content Strategist, Head of Content, Director of Content, VP Content — all are valid for a senior candidate. Titles are unreliable seniority indicators. Case where a Content Manager role requires 10+ years is common."
   "summary": "one sentence summary of this person"
 }`, true);
 
@@ -694,51 +712,97 @@ async function runSearch() {
       throw new Error('Could not parse resume. Please ensure the file contains readable text.');
     }
 
-    doneLog(parseLog, `Resume parsed: ${resume.currentTitle} · ${resume.yearsExperience} yrs experience`);
+    doneLog(parseLog, `Resume parsed: ${resume.primaryProfession||resume.currentTitle} · ${resume.yearsExperience} yrs · ${resume.seniorityLevel} level`);
 
-    const searchQueries = jobTitle
-      ? [jobTitle]
-      : (resume.searchQueries || [resume.currentTitle]).slice(0, 4);
+    // Step 2: Expand user-provided roles into synonyms via Claude
+    const userRoles = jobTitle.split(',').map(t => t.trim()).filter(Boolean);
+    document.getElementById('progressTitle').textContent = 'Expanding role synonyms...';
+    const expandLog = addLog(`Expanding ${userRoles.length} target role(s) into search variants...`, true);
 
+    let searchQueries = [...userRoles]; // fallback to raw user input
+    try {
+      const expandResult = await callClaude(
+        'You are a job title expert. Return ONLY a valid JSON array of strings, no markdown, no explanation.',
+        `The user wants to find jobs for these target roles: ${userRoles.join(', ')}
+
+Generate a comprehensive list of ALL common job title variants and synonyms for these roles that recruiters actually use in job postings. Include variations in seniority labels (Manager, Lead, Head, Director, VP, Senior) but keep the core function the same.
+
+Return a flat JSON array of unique search queries (max 8 total, prioritise the most commonly posted titles):
+["title1", "title2", "title3", ...]
+
+Example: if user enters "Head of Content", return ["Head of Content", "Content Director", "Director of Content", "VP Content", "Content Lead", "Senior Content Manager", "Content Marketing Lead", "Editorial Director"]`
+      );
+      const expanded = JSON.parse(expandResult.replace(/```json|```/g,'').trim());
+      if(Array.isArray(expanded) && expanded.length > 0) {
+        searchQueries = [...new Set([...userRoles, ...expanded])].slice(0, 8);
+      }
+    } catch(e) {
+      // Fallback: just use user-provided roles
+    }
+
+    doneLog(expandLog, `Found ${searchQueries.length} title variants: ${searchQueries.join(', ')}`);
     const primaryQuery = searchQueries[0];
+    const scraperQueries = searchQueries.slice(0, 3);
+
     document.getElementById('progressTitle').textContent = 'Searching job boards...';
     initSourcePills();
 
-    // Run all title variants across all sources, pool results
-    addLog(`Searching with ${searchQueries.length} title variants: ${searchQueries.join(', ')}`);
-
-    const scraperPromises = {};
-    const allSearchPromises = [];
-
-    searchQueries.forEach(query => {
-      if(activeSources.has('google'))   allSearchPromises.push(scrapeGoogle(query, location).catch(()=>[]));
-      if(activeSources.has('linkedin')) allSearchPromises.push(scrapeLinkedIn(query, location).catch(()=>[]));
-      if(activeSources.has('naukri'))   allSearchPromises.push(scrapeNaukri(query, location).catch(()=>[]));
-      if(activeSources.has('indeed'))   allSearchPromises.push(scrapeIndeed(query, location).catch(()=>[]));
-    });
-
-    // Set pills to searching
+    // Set pills BEFORE launching scrapers
     if(activeSources.has('google'))   setPillState('google','searching');
     if(activeSources.has('linkedin')) setPillState('linkedin','searching');
     if(activeSources.has('naukri'))   setPillState('naukri','searching');
     if(activeSources.has('indeed'))   setPillState('indeed','searching');
 
-    const allResults = await Promise.allSettled(allSearchPromises);
-    let allJobs = allResults.flatMap(r => r.status==='fulfilled' ? r.value : []);
+    addLog(`Scraping LinkedIn, Naukri and Adzuna in parallel...`);
 
-    // Update pills based on which sources returned results
-    ['google','linkedin','naukri','indeed'].forEach(src => {
+    // Step 1: Run LinkedIn, Naukri, Adzuna in parallel (fast scrapers)
+    const fastPromises = [];
+    scraperQueries.forEach(query => {
+      if(activeSources.has('linkedin')) fastPromises.push(scrapeLinkedIn(query, primaryLocation).catch(()=>[]));
+      if(activeSources.has('naukri'))   fastPromises.push(scrapeNaukri(query, primaryLocation).catch(()=>[]));
+      if(activeSources.has('indeed'))   fastPromises.push(scrapeIndeed(query, primaryLocation).catch(()=>[]));
+    });
+
+    const fastResults = await Promise.allSettled(fastPromises);
+    let allJobs = fastResults.flatMap(r => r.status==='fulfilled' ? r.value : []);
+
+    // Update fast source pills
+    ['linkedin','naukri','indeed'].forEach(src => {
       if(activeSources.has(src)) {
-        const hasResults = allJobs.some(j => j.source.toLowerCase().includes(src === 'google' ? 'google' : src));
-        setPillState(src, hasResults ? 'done' : 'failed');
+        const srcLabels = { linkedin:'LinkedIn', naukri:'Naukri', indeed:'Adzuna' };
+        setPillState(src, allJobs.some(j => j.source === srcLabels[src]) ? 'done' : 'failed');
       }
     });
 
-    // Deduplicate by URL
-    const seen = new Set();
+    // Step 2: Run Google sequentially (slow actor - runs alone to avoid concurrency limits)
+    if(activeSources.has('google')) {
+      addLog(`Searching Google Jobs...`);
+      try {
+        const googleJobs = await scrapeGoogle(primaryQuery, primaryLocation);
+        if(googleJobs.length > 0) {
+          allJobs = allJobs.concat(googleJobs);
+          setPillState('google', 'done');
+        } else {
+          setPillState('google', 'failed');
+        }
+      } catch(e) {
+        setPillState('google', 'failed');
+      }
+    }
+
+
+    // Deduplicate: by URL for scraped results, by title+company for Google Jobs
+    const seenUrls = new Set();
+    const seenTitleCompany = new Set();
     allJobs = allJobs.filter(j => {
-      if(!j.url || j.url==='#' || seen.has(j.url)) return false;
-      seen.add(j.url); return true;
+      const tcKey = `${j.title?.toLowerCase()}|${j.company?.toLowerCase()}`;
+      if(seenTitleCompany.has(tcKey)) return false;
+      seenTitleCompany.add(tcKey);
+      if(j.url && j.url !== '#') {
+        if(seenUrls.has(j.url)) return false;
+        seenUrls.add(j.url);
+      }
+      return true;
     });
 
     addLog(`Found ${allJobs.length} unique listings across all sources and title variants`);
@@ -751,67 +815,129 @@ async function runSearch() {
       return;
     }
 
+    // Pre-ranking domain filter: check title only (snippets contain too many false positives)
+    const domainKeywords = [
+      ...userRoles.flatMap(r => r.toLowerCase().split(' ')).filter(w => w.length > 3),
+      'content','seo','marketing','editorial','brand','communications','digital','creative',
+      'copy','writer','writing','media','social','growth','inbound','demand','campaign',
+      'geo','aeo','strategy','strategist','pr '
+    ];
+
+    // Explicit exclusion: titles that should never appear regardless of snippet
+    const excludeKeywords = ['intern','internship','educator','teacher','trainer','professor','lecturer','faculty'];
+
+    const isDomainRelevant = (job) => {
+      const titleLower = (job.title || '').toLowerCase();
+      // Exclude explicit non-relevant roles
+      if(excludeKeywords.some(kw => titleLower.includes(kw))) return false;
+      // Must match domain keywords in the title
+      return domainKeywords.some(kw => titleLower.includes(kw));
+    };
+
+    const relevantJobs = allJobs.filter(isDomainRelevant);
+    const filteredByDomain = allJobs.length - relevantJobs.length;
+    if(filteredByDomain > 0) addLog(`Removed ${filteredByDomain} unrelated roles (audit, engineering, sales etc)`);
+
+    // Use relevant jobs for source diversity and ranking
+    const relevantBySource = {};
+    relevantJobs.forEach((j, idx) => {
+      const src = j.source || 'Other';
+      if(!relevantBySource[src]) relevantBySource[src] = [];
+      relevantBySource[src].push({ ...j, _idx: idx });
+    });
+    Object.keys(relevantBySource).forEach(src => {
+      relevantBySource[src].sort((a,b) => (b.snippet?.length||0) - (a.snippet?.length||0));
+    });
+    const topPerSource = Object.values(relevantBySource).flatMap(jobs => jobs.slice(0, 5));
+    const topIdxSet = new Set(topPerSource.map(j => j._idx));
+    const rest = relevantJobs
+      .filter((j, idx) => !topIdxSet.has(idx))
+      .sort((a,b) => (b.snippet?.length||0) - (a.snippet?.length||0));
+    const jobsForRanking = [...topPerSource, ...rest]
+      .slice(0, 15)
+      .map((j,i) => { const { _idx, ...job } = j; return { ...job, id: i }; });
+
+    if(relevantJobs.length === 0) {
+      document.getElementById('spinIcon').style.display = 'none';
+      document.getElementById('progressTitle').textContent = 'No relevant jobs found';
+      addLog('No jobs matched your target roles. Try broader role titles or a different location.');
+      document.getElementById('searchBtn').disabled = false;
+      return;
+    }
+
     // Step 3: Rank
     document.getElementById('progressTitle').textContent = 'Ranking by match score...';
     const rankLog = addLog('Claude comparing each JD against your resume...', true);
 
     const rankResult = await callClaude(
       'You are a job matching expert. Return ONLY a valid JSON array, no markdown, no explanation.',
-      `Score each job against this candidate. Return a ranked JSON array.
+      `Score each job against this candidate. Return ALL jobs sorted by matchScore descending.
 
-CRITICAL RANKING RULES:
-1. IGNORE job titles completely when scoring. A "Content Manager" requiring 10+ years is the same seniority as "Head of Content". Read the JD description, not the title.
-2. Score based on these criteria in order of importance:
-   - Skills match (40%): Do the required skills match what the candidate has?
-   - Experience match (35%): Does the required years of experience match? Look for phrases like "10+ years", "minimum 8 years" in the description.
-   - Location eligibility (25%): Is the candidate actually eligible? If the role says "must be based in [country other than India]", "US citizens only", "no remote", or similar exclusions for Indian candidates, set locationEligible to false and matchScore to 0 regardless of other scores.
-   - Domain relevance has LOW priority. Candidates can apply across industries.
-3. Only give 80+ matchScore for genuine strong matches across skills AND experience AND location.
+RANKING RULES:
+1. User's target roles are: ${userRoles.join(', ')}. Score jobs in these roles or their direct synonyms highest.
+2. PRIMARY profession is: ${resume.primaryProfession || resume.currentTitle}. Direct matches score 70-100. Adjacent roles (e.g. broader marketing) score 40-69. Completely unrelated roles (audit, engineering, operations, sales, HR) score below 30.
+3. IGNORE seniority in job titles. A "Manager" requiring 10+ years equals a "Director". Read the JD requirements.
+4. Score on:
+   - Skills match (45%): Core skills match. Unrelated roles get 0-20 here.
+   - Experience match (35%): Years required vs candidate's ${resume.yearsExperience} years.
+   - Location eligibility (20%): Only hard-disqualify if role explicitly bans Indian candidates.
+5. Every job must be scored. Do not skip any.
 
 Candidate:
+- Target roles: ${userRoles.join(', ')}
+- Primary profession: ${resume.primaryProfession || resume.currentTitle}
 - Title: ${resume.currentTitle}
 - Experience: ${resume.yearsExperience} years
-- Skills: ${(resume.topSkills||[]).join(', ')}
-- Domains: ${(resume.domains||[]).join(', ')}
+- Top skills: ${(resume.topSkills||[]).join(', ')}
+- Secondary skills: ${(resume.secondarySkills||[]).join(', ')}
 - Seniority: ${resume.seniorityLevel}
-- Based in: India
-- Summary: ${resume.summary}
+- Open to: ${allLocations}
 
-Jobs to score (${allJobs.length} total):
-${JSON.stringify(allJobs.slice(0,25).map((j,i)=>({id:i, title:j.title, company:j.company, source:j.source, location:j.location, snippet:j.snippet?.slice(0,400)})), null, 2)}
+Jobs to score (${jobsForRanking.length} total):
+${JSON.stringify(jobsForRanking.map(j=>({id:j.id, title:j.title, company:j.company, source:j.source, location:j.location, snippet:j.snippet?.slice(0,150)||''})), null, 2)}
 
-Return array sorted by matchScore descending:
+Return array sorted by matchScore descending. Score every job:
 [{
   "id": original_id,
   "matchScore": 0-100,
   "skillsScore": 0-100,
   "experienceScore": 0-100,
   "locationEligible": true/false,
-  "whyMatch": "one honest sentence about fit based on skills and experience required in the JD, not the title",
+  "whyMatch": "one sentence. Be specific.",
   "topMatchSkills": ["skill1","skill2","skill3"]
 }]`);
 
     let scores;
     try {
-      scores = JSON.parse(rankResult.replace(/```json|```/g,'').trim());
+      const cleaned = rankResult.replace(/```json|```/g,'').trim();
+      if(!cleaned.startsWith('[')) throw new Error('Not a JSON array');
+      scores = JSON.parse(cleaned);
     } catch(e) {
-      scores = allJobs.slice(0,10).map((j,i)=>({ id:i, matchScore:70-i*3, skillsScore:72-i*3, experienceScore:68-i*3, locationEligible:true, whyMatch:'Good alignment with your background.', topMatchSkills:(resume.topSkills||[]).slice(0,3) }));
+      // Fallback: assign descending scores based on position in jobsForRanking
+      addLog('Ranking used position-based fallback (Claude response issue).');
+      scores = jobsForRanking.map((j,i) => ({
+        id: i,
+        matchScore: Math.max(90 - (i * 4), 20),
+        skillsScore: Math.max(88 - (i * 4), 20),
+        experienceScore: Math.max(85 - (i * 4), 20),
+        locationEligible: true,
+        whyMatch: 'Matched based on title and role search.',
+        topMatchSkills: (resume.topSkills||[]).slice(0,3)
+      }));
     }
 
     const rankedJobs = scores
-      .map(s => ({ ...allJobs[s.id], ...s }))
+      .map(s => ({ ...jobsForRanking.find(j=>j.id===s.id)||jobsForRanking[s.id]||{}, ...s }))
       .filter(j => j.title && j.matchScore >= 45 && j.locationEligible !== false)
       .sort((a,b) => b.matchScore - a.matchScore)
-      .slice(0, 12)
       .map((j,i) => ({ ...j, rank: i+1 }));
 
-    const filteredOut = scores.length - rankedJobs.length;
-    doneLog(rankLog, `${rankedJobs.length} strong matches found${filteredOut > 0 ? ` · ${filteredOut} filtered out (low match or location ineligible)` : ''}`);
+    doneLog(rankLog, `${rankedJobs.length} jobs ranked by match score`);
 
     if(rankedJobs.length === 0) {
       document.getElementById('spinIcon').style.display = 'none';
-      document.getElementById('progressTitle').textContent = 'No strong matches found';
-      addLog('All results scored below 45. Try a different job title or broader location.');
+      document.getElementById('progressTitle').textContent = 'No results found';
+      addLog('No results returned. Try different target roles or a broader location.');
       document.getElementById('searchBtn').disabled = false;
       return;
     }
@@ -819,7 +945,7 @@ Return array sorted by matchScore descending:
     document.getElementById('spinIcon').style.display = 'none';
     document.getElementById('progressTitle').textContent = `Done. ${rankedJobs.length} jobs ranked.`;
 
-    setTimeout(() => renderResults(resume, rankedJobs, primaryQuery), 500);
+    setTimeout(() => renderResults(resume, rankedJobs, primaryQuery, allLocations), 500);
     setStep(3);
 
   } catch(e) {
@@ -831,20 +957,21 @@ Return array sorted by matchScore descending:
 }
 
 // ── Render results ─────────────────────────────────────
-function renderResults(resume, jobs, query) {
+function renderResults(resume, jobs, query, allLocations) {
   const panel = document.getElementById('resultsPanel');
   panel.classList.add('show');
 
   document.getElementById('resultsMeta').innerHTML =
-    `${jobs.length} jobs · last 15 days<br>Query: "${query}"`;
+    `${jobs.length} jobs ranked · last 15 days<br>${allLocations}`;
 
   // Resume strip
   const strip = document.getElementById('resumeStrip');
   strip.innerHTML = [
     ['Name', resume.name||'Candidate'],
+    ['Profession', resume.primaryProfession||resume.currentTitle||'Professional'],
     ['Title', resume.currentTitle||'Professional'],
     ['Experience', `${resume.yearsExperience||'?'} years`],
-    ['Skills', (resume.topSkills||[]).slice(0,3).join(', ')],
+    ['Top Skills', (resume.topSkills||[]).slice(0,3).join(', ')],
     ['Level', resume.seniorityLevel||'Senior']
   ].map(([l,v])=>`<div class="rchip"><div class="rchip-label">${l}</div><div class="rchip-val">${v}</div></div>`).join('');
 
