@@ -51,7 +51,7 @@ exports.handler = async function(event) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'x-api-key':ANT_KEY, 'anthropic-version':'2023-06-01' },
-      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:4000, system, messages:[{ role:'user', content }] })
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:6000, system, messages:[{ role:'user', content }] })
     });
     const data = await res.json();
     if(!res.ok) return { statusCode: res.status, headers, body: JSON.stringify({ error: data.error?.message || 'Claude error' }) };
@@ -64,7 +64,7 @@ exports.handler = async function(event) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'x-api-key':ANT_KEY, 'anthropic-version':'2023-06-01' },
-      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:4000, system, messages:[{ role:'user', content: prompt }] })
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:6000, system, messages:[{ role:'user', content: prompt }] })
     });
     const data = await res.json();
     if(!res.ok) return { statusCode: res.status, headers, body: JSON.stringify({ error: data.error?.message || 'Claude error' }) };
@@ -104,6 +104,47 @@ exports.handler = async function(event) {
     const data = await res.json();
     if(!res.ok) return { statusCode: res.status, headers, body: JSON.stringify({ error: 'Results fetch failed' }) };
     return { statusCode: 200, headers, body: JSON.stringify({ items: data }) };
+  }
+
+  // ── Action: SerpAPI Google Jobs search ───────────────
+  if(action === 'serpapi_jobs') {
+    const SERP_KEY = process.env.SERPER_API_KEY || process.env.SERPAPI_KEY || process.env.SERPAPI_API_KEY;
+    if(!SERP_KEY) return { statusCode: 200, headers, body: JSON.stringify({ jobs: [], error: 'No SerpAPI key found in environment' }) };
+    const { query, location } = body;
+    const isUAE = (location||'').toLowerCase().includes('dubai') || (location||'').toLowerCase().includes('uae');
+    const gl = isUAE ? 'ae' : 'in';
+    const q = encodeURIComponent(`${query} jobs`);
+    const loc = encodeURIComponent(location || 'India');
+    const url = `https://serpapi.com/search?engine=google_jobs&q=${q}&location=${loc}&gl=${gl}&hl=en&api_key=${SERP_KEY}`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if(data.error) {
+        console.error('SerpAPI error:', data.error);
+        return { statusCode: 200, headers, body: JSON.stringify({ jobs: [], serpError: data.error }) };
+      }
+      return { statusCode: 200, headers, body: JSON.stringify({ jobs: data.jobs_results || [] }) };
+    } catch(e) {
+      console.error('SerpAPI fetch error:', e.message);
+      return { statusCode: 200, headers, body: JSON.stringify({ jobs: [], fetchError: e.message }) };
+    }
+  }
+
+  // ── Action: Adzuna jobs search ────────────────────────
+  if(action === 'adzuna_search') {
+    const ADZUNA_ID  = process.env.ADZUNA_APP_ID;
+    const ADZUNA_KEY = process.env.ADZUNA_API_KEY;
+    if(!ADZUNA_ID || !ADZUNA_KEY) return { statusCode: 500, headers, body: JSON.stringify({ error: 'Adzuna keys not configured' }) };
+    const { query, location } = body;
+    const isUAE = (location||'').toLowerCase().includes('dubai') || (location||'').toLowerCase().includes('uae');
+    const country = isUAE ? 'ae' : 'in';
+    const loc = encodeURIComponent(location || '');
+    const q   = encodeURIComponent(query);
+    const url = `https://api.adzuna.com/v1/api/jobs/${country}/search/1?app_id=${ADZUNA_ID}&app_key=${ADZUNA_KEY}&results_per_page=15&what=${q}&where=${loc}&max_days_old=15&sort_by=date&content-type=application/json`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!res.ok) return { statusCode: res.status, headers, body: JSON.stringify({ error: 'Adzuna error' }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ results: data.results || [] }) };
   }
 
   return { statusCode: 400, headers, body: JSON.stringify({ error: `Unknown action: ${action}` }) };
